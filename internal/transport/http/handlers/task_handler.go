@@ -31,6 +31,7 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Title:       req.Title,
 		Description: req.Description,
 		Status:      req.Status,
+		Recurrence:  req.Recurrence.toDomain(),
 	})
 	if err != nil {
 		writeUsecaseError(w, err)
@@ -73,6 +74,7 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Title:       req.Title,
 		Description: req.Description,
 		Status:      req.Status,
+		Recurrence:  req.Recurrence.toDomain(),
 	})
 	if err != nil {
 		writeUsecaseError(w, err)
@@ -112,6 +114,36 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+// NextOccurrences возвращает ближайшие даты повторений задачи.
+// Query-параметр n задаёт количество дат (по умолчанию 10, максимум 100).
+func (h *TaskHandler) NextOccurrences(w http.ResponseWriter, r *http.Request) {
+	id, err := getIDFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	n := 10
+	if nStr := r.URL.Query().Get("n"); nStr != "" {
+		parsed, err := strconv.Atoi(nStr)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(w, http.StatusBadRequest, errors.New("query param n must be an integer between 1 and 100"))
+			return
+		}
+		n = parsed
+	}
+
+	dates, err := h.usecase.NextOccurrences(r.Context(), id, n)
+	if err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, occurrencesDTO{Occurrences: dates})
+}
+
+// ---- helpers ----------------------------------------------------------------
+
 func getIDFromRequest(r *http.Request) (int64, error) {
 	rawID := mux.Vars(r)["id"]
 	if rawID == "" {
@@ -119,11 +151,7 @@ func getIDFromRequest(r *http.Request) (int64, error) {
 	}
 
 	id, err := strconv.ParseInt(rawID, 10, 64)
-	if err != nil {
-		return 0, errors.New("invalid task id")
-	}
-
-	if id <= 0 {
+	if err != nil || id <= 0 {
 		return 0, errors.New("invalid task id")
 	}
 
@@ -133,12 +161,7 @@ func getIDFromRequest(r *http.Request) (int64, error) {
 func decodeJSON(r *http.Request, dst any) error {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(dst); err != nil {
-		return err
-	}
-
-	return nil
+	return decoder.Decode(dst)
 }
 
 func writeUsecaseError(w http.ResponseWriter, err error) {
@@ -153,14 +176,11 @@ func writeUsecaseError(w http.ResponseWriter, err error) {
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]string{
-		"error": err.Error(),
-	})
+	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-
 	_ = json.NewEncoder(w).Encode(payload)
 }

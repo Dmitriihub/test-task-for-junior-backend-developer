@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -27,21 +28,17 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*taskdomain.Ta
 		return nil, err
 	}
 
+	now := s.now()
 	model := &taskdomain.Task{
 		Title:       normalized.Title,
 		Description: normalized.Description,
 		Status:      normalized.Status,
-	}
-	now := s.now()
-	model.CreatedAt = now
-	model.UpdatedAt = now
-
-	created, err := s.repo.Create(ctx, model)
-	if err != nil {
-		return nil, err
+		Recurrence:  normalized.Recurrence,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
-	return created, nil
+	return s.repo.Create(ctx, model)
 }
 
 func (s *Service) GetByID(ctx context.Context, id int64) (*taskdomain.Task, error) {
@@ -67,15 +64,11 @@ func (s *Service) Update(ctx context.Context, id int64, input UpdateInput) (*tas
 		Title:       normalized.Title,
 		Description: normalized.Description,
 		Status:      normalized.Status,
+		Recurrence:  normalized.Recurrence,
 		UpdatedAt:   s.now(),
 	}
 
-	updated, err := s.repo.Update(ctx, model)
-	if err != nil {
-		return nil, err
-	}
-
-	return updated, nil
+	return s.repo.Update(ctx, model)
 }
 
 func (s *Service) Delete(ctx context.Context, id int64) error {
@@ -89,6 +82,29 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 func (s *Service) List(ctx context.Context) ([]taskdomain.Task, error) {
 	return s.repo.List(ctx)
 }
+
+// NextOccurrences возвращает до n ближайших дат повторений для задачи с данным id.
+func (s *Service) NextOccurrences(ctx context.Context, id int64, n int) ([]time.Time, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("%w: id must be positive", ErrInvalidInput)
+	}
+	if n < 1 || n > 100 {
+		return nil, fmt.Errorf("%w: n must be between 1 and 100", ErrInvalidInput)
+	}
+
+	t, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if t.Recurrence == nil {
+		return nil, errors.New("task has no recurrence settings")
+	}
+
+	return t.Recurrence.NextOccurrences(s.now(), n), nil
+}
+
+// ---- validation helpers -----------------------------------------------------
 
 func validateCreateInput(input CreateInput) (CreateInput, error) {
 	input.Title = strings.TrimSpace(input.Title)
@@ -106,6 +122,15 @@ func validateCreateInput(input CreateInput) (CreateInput, error) {
 		return CreateInput{}, fmt.Errorf("%w: invalid status", ErrInvalidInput)
 	}
 
+	if err := input.Recurrence.Validate(); err != nil {
+		return CreateInput{}, fmt.Errorf("%w: %s", ErrInvalidInput, err.Error())
+	}
+
+	// Если recurrence задан, но start_date не указан — берём сегодня.
+	if input.Recurrence != nil && input.Recurrence.StartDate.IsZero() {
+		input.Recurrence.StartDate = time.Now().UTC().Truncate(24 * time.Hour)
+	}
+
 	return input, nil
 }
 
@@ -119,6 +144,14 @@ func validateUpdateInput(input UpdateInput) (UpdateInput, error) {
 
 	if !input.Status.Valid() {
 		return UpdateInput{}, fmt.Errorf("%w: invalid status", ErrInvalidInput)
+	}
+
+	if err := input.Recurrence.Validate(); err != nil {
+		return UpdateInput{}, fmt.Errorf("%w: %s", ErrInvalidInput, err.Error())
+	}
+
+	if input.Recurrence != nil && input.Recurrence.StartDate.IsZero() {
+		input.Recurrence.StartDate = time.Now().UTC().Truncate(24 * time.Hour)
 	}
 
 	return input, nil
