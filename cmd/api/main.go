@@ -39,7 +39,9 @@ func main() {
 	taskUsecase := task.NewService(taskRepo)
 	taskHandler := httphandlers.NewTaskHandler(taskUsecase)
 	docsHandler := swaggerdocs.NewHandler()
-	router := transporthttp.NewRouter(taskHandler, docsHandler)
+
+	// Передаём logger в router — он используется в middleware для логирования запросов.
+	router := transporthttp.NewRouter(taskHandler, docsHandler, logger)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -88,6 +90,5 @@ func envOrDefault(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
-
 	return fallback
 }
